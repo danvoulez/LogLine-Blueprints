@@ -1,0 +1,204 @@
+LogLine Mini Suite — Rebrand Blueprint v1.0
+
+Objetivo: consolidar o rebranding e a arquitetura dos 10 produtos mini em torno do novo mini (ex–minicore), com API/CLI/SDK unificados, TDLN Gate e governança determinística.
+
+⸻
+
+0) North Star
+	•	mini = motor geral JSON✯Atomic para criptografia, execução de contratos/spans e orquestração LLM‑friendly.
+	•	Produtos mini = ferramentas plugáveis que enriquecem projetos internos ou de clientes via api.logline.world.
+	•	TDLN + LLM Council na frente de todas as entradas em linguagem natural; TDLN decide.
+	•	LogLine App = The ultimate frontend: Chat + Ledger + Apps mini integrados.
+
+⸻
+
+1) Mapa de Produtos
+
+1.1. mini (ex–minicore)
+	•	O que é: runtime JSON✯Atomic (contratos, spans, prova, políticas) + criptografia (Ed25519/BLAKE3).
+	•	O que faz: executa spans, aplica policies, assina/valida recibos, expõe API universal.
+	•	Tagline: “Nosso computador na nuvem.”
+
+1.2. miniPrompt
+	•	Geração/transformação determinística de prompts e prompt-kernels (hash + versionamento + cookbook).
+
+1.3. miniMemory
+	•	Store semântico + embeddings + chaves de privacidade (local-first opcional) com grants por tenant/usuário.
+
+1.4. miniWorkflows
+	•	Orquestrador de passos declarativos (spans → steps → policies), com replays e DLQ.
+
+1.5. miniTools
+	•	Execução segura de tools (HTTP, DB, code runners) a partir de spans com capabilities e quotas.
+
+1.6. miniContainer (deploy • wallet • vault)
+	•	deploy: sobe artefatos/containers (Railway/Podman) a partir de specs em spans.
+	•	wallet: custodiante de chaves (API/Ed25519) + assinaturas + KID/rotação.
+	•	vault: segredos/artefatos com escopo (tenant/ambiente) e prova de acesso.
+
+Observação: podemos expor como submódulos: mini-container.deploy, mini-container.wallet, mini-container.vault.
+
+1.7. miniContratos
+	•	Produto para pequenas empresas: registro de acordos fora do código, com templates JSON✯Atomic e Flows nativos.
+	•	Volta à lógica da antiga tela New do minicontratos — agora 100% ledger-first e disponível via API.
+
+1.8. TDLN Gate + LLM Council (obrigatório)
+	•	Entrada NL → LLM Conselheiro local → (opcional LLM premium) → TDLN decide → span perfeito.
+
+1.9. LogLine App
+	•	Frontend unificado: Chat AI + Acesso ao Ledger + painel dos produtos mini.
+	•	LLM Engine com DRI do TDLN (mensagens organizadas, forte capacidade de ação).
+
+⸻
+
+2) Naming & Pacotes
+	•	Serviços (HTTP): mini-* (ex.: mini-workflows, mini-container), sob api.logline.world.
+	•	NPM/TS: @logline/mini-* (core, prompt, memory, workflows, tools, container, contratos, sdk, cli).
+	•	CLI: logline <produto>:<ação> (ex.: logline container:deploy).
+	•	SDK: client.<produto>.<método>() (ex.: client.container.deploy.apply(...)).
+
+⸻
+
+3) API Universal (envelope padrão)
+
+Endpoint: POST /v1/commands (ou recursos específicos por produto).
+
+{
+  "action": "<produto>.<ação>",
+  "resource": "urn:<domínio>/<id>",
+  "body": { /* payload canônico */ },
+  "ctx": {"tenant": "vv", "env": "prd"}
+}
+
+ACK: ok | need_more | invalid + receipt (hash/assinatura) + trace_id.
+
+⸻
+
+4) Superfícies por Produto (API/CLI/SDK)
+
+4.1 mini (core)
+	•	API
+	•	POST /v1/spans/execute — executa/valida span.
+	•	POST /v1/policies/evaluate — aplica conjunto de policies.
+	•	CLI logline span:execute --file span.json | logline policy:test --law laws.yaml
+	•	SDK client.core.executeSpan(span) | client.core.evaluatePolicies(input)
+
+4.2 miniPrompt
+	•	API POST /v1/prompt/compile, POST /v1/prompt/run
+	•	CLI logline prompt:run --kernel kernel.md --vars vars.json
+	•	SDK client.prompt.compile(...), client.prompt.run(...)
+
+4.3 miniMemory
+	•	API POST /v1/memory/put|get|search|grant
+	•	CLI logline memory:put --key k --file data.json
+	•	SDK client.memory.put/get/search/grant
+
+4.4 miniWorkflows
+	•	API POST /v1/workflows/start, POST /v1/workflows/step, GET /v1/workflows/:id
+	•	CLI logline wf:start --flow order-approval
+	•	SDK client.workflows.start/step/get
+
+4.5 miniTools
+	•	API POST /v1/tools/invoke (tool registry + caps)
+	•	CLI logline tools:invoke --tool http --url ...
+	•	SDK client.tools.invoke(tool, args)
+
+4.6 miniContainer
+	•	deploy: POST /v1/container/deploy | CLI logline container:deploy --ref app@1.0 --target railway
+	•	wallet: POST /v1/container/wallet/sign|verify | CLI logline wallet:sign --file payload.json
+	•	vault: POST /v1/container/vault/put|get | CLI logline vault:put --name SECRET --from .env
+	•	SDK client.container.deploy.apply(...), client.wallet.sign(...), client.vault.put/get(...)
+
+4.7 miniContratos
+	•	API POST /v1/contratos/register, POST /v1/contratos/flow, GET /v1/contratos/:id
+	•	CLI logline contratos:new --template nda --party A --party B
+	•	SDK client.contratos.register/flow/get
+
+4.8 TDLN Gate
+	•	API POST /v1/tdln/decide|assist|compile
+	•	CLI logline tdln:decide --text "..." --prefer-premium
+	•	SDK client.tdln.decide/assist/compile
+
+⸻
+
+5) Spans — Templates (exemplos)
+
+5.1 Deploy (miniContainer.deploy)
+
+{
+  "action": "container.deploy.apply",
+  "resource": "urn:app/web",
+  "body": {
+    "ref": "web@1.2.3",
+    "target": {"provider": "railway", "project_id": "rw1", "service": "web"},
+    "env": {"NODE_ENV": "production"}
+  }
+}
+
+5.2 Contrato (miniContratos.register)
+
+{
+  "action": "contratos.register",
+  "resource": "urn:agreement/nda/2025-0001",
+  "body": {
+    "template": "nda@v3",
+    "parties": [{"name": "Empresa A"}, {"name": "Empresa B"}],
+    "effective_date": "2025-11-17",
+    "jurisdiction": "PT"
+  }
+}
+
+
+⸻
+
+6) Governança rápida
+	•	Tenants/Ambientes: obrigatório; quotas + rate limits por ação.
+	•	Assinaturas: ApiKey (transporte) + Ed25519 (recibos, onde aplicável).
+	•	Observabilidade: métricas ok/need_more/invalid, P50/P95, throughput.
+	•	TDLN decide: LLMs aconselham, nunca decidem.
+
+⸻
+
+7) Migração (ex–minicore → mini)
+	•	Aliases de ação por 60 dias: core.* → mini.* (deprecado em X‑Deprecation: true).
+	•	SDK exporta ambos namespaces na v1; remove core.* na v2.
+	•	CLI: comandos antigos avisam e redirecionam.
+
+minicontratos (antigo) → miniContratos (novo)
+	•	Reaproveitar templates/ledger; padronizar endpoints.
+	•	Reativar Flows como workflows declarativos.
+
+⸻
+
+8) Pricing & Packaging (visão)
+	•	Starter: mini + 2 produtos (ex.: container.deploy + contratos) — limites baixos.
+	•	Pro: mini + 5 produtos, TDLN Gate incluso (LLM local) — SSE/Webhooks prontos.
+	•	Enterprise: todos os produtos, LLM Premium, SSO/SCIM, auditoria avançada.
+
+⸻
+
+9) Backlog de Prioridades (Futuro 3)
+	1.	mini (core) pronto + v1/commands estável.
+	2.	miniContainer.deploy, miniContratos (MVP mercado).
+	3.	TDLN Gate (Mini/Max) com LLM local.
+	4.	miniWorkflows + miniTools (capabilities) → habilitar automações.
+	5.	miniPrompt + miniMemory → elevar o LLM Engine.
+	6.	LogLine App (frontend unificado).
+
+⸻
+
+10) Roadmap v0 → v1 (4–6 semanas)
+	•	S1: mini+API universal; container.deploy; contratos.register; CLI/SDK básicos.
+	•	S2: TDLN Gate (Mini) + LLM local; Workflows (mínimo) + Tools (HTTP runner).
+	•	S3: Vault/Wallet; Prompt/Memory; App shell; métricas & policies endurecidas.
+
+⸻
+
+11) Integração com LogLine App
+	•	App consome o ledger e chama API mini; TDLN Gate inspecciona NL.
+	•	Painéis por produto, histórico por trace_id, reexecução de spans e explain.
+
+⸻
+
+12) Anexos
+	•	OpenAPI (universal + produtos), CLI help, SDK stubs, exemplos de spans e policies.
