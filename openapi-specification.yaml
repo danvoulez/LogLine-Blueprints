@@ -1,0 +1,1650 @@
+openapi: 3.1.0
+info:
+  title: LogLine Universal API
+  version: 1.0.0
+  description: |
+    LogLine Universal API — Complete specification for the span-based universal API.
+
+    ## Overview
+    All operations flow through spans (JSON✯Atomic) with TDLN Gate validation.
+    The API is minimal; complexity lives in CLI/SDK.
+
+    ## Architecture
+    - **TDLN-first**: All inputs validated by deterministic parser
+    - **Append-only**: Immutable event log with receipts
+    - **Universal transports**: SSE, polling, webhooks, WebSocket (optional)
+    - **Privacy-active**: Secrets via grant:// URIs materialized at edge
+
+    ## Security
+    - ApiKey for authentication
+    - Ed25519 + BLAKE3 for signatures and receipts
+    - Anti-replay: X-Timestamp, X-Nonce, Idempotency-Key
+  contact:
+    name: LogLine Support
+    url: https://logline.world
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.logline.world
+    description: Production
+  - url: https://api-staging.logline.world
+    description: Staging
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: 'Format: ApiKey <token>'
+
+  parameters:
+    TenantHeader:
+      name: X-Tenant-Id
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-z0-9_-]{3,64}$'
+      description: Tenant identifier
+      example: voulezvous
+
+    EnvHeader:
+      name: X-Env
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: [dev, stg, prd]
+        default: prd
+      description: Environment
+
+    SignatureAlgHeader:
+      name: X-Signature-Alg
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: [ed25519-blake3]
+      description: Signature algorithm
+
+    SignatureKeyIdHeader:
+      name: X-Signature-KeyId
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Key identifier (kid)
+
+    SignatureHeader:
+      name: X-Signature
+      in: header
+      required: false
+      schema:
+        type: string
+        format: base64
+      description: Base64-encoded signature
+
+    TimestampHeader:
+      name: X-Timestamp
+      in: header
+      required: false
+      schema:
+        type: string
+        format: date-time
+      description: ISO8601 timestamp (±120s tolerance)
+
+    NonceHeader:
+      name: X-Nonce
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+      description: Unique nonce for replay protection
+
+    PayloadHashHeader:
+      name: X-Payload-Hash
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: '^blake3-256=[a-f0-9]{64}$'
+      description: BLAKE3 hash of canonical payload
+
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+      description: Idempotency key for request deduplication
+
+  schemas:
+    # ============================================================
+    # CORE SCHEMAS
+    # ============================================================
+
+    EntityType:
+      type: string
+      enum:
+        - contract
+        - function
+        - decision
+        - agent
+        - law
+        - file
+        - test
+      description: Type of entity in the span
+
+    Span:
+      type: object
+      required:
+        - schema_version
+        - entity_type
+        - this
+        - did
+        - intent
+        - subject
+        - ts
+      properties:
+        schema_version:
+          type: string
+          pattern: '^\d+\.\d+\.\d+$'
+          example: "1.1.0"
+          description: Span schema version
+
+        entity_type:
+          $ref: '#/components/schemas/EntityType'
+
+        this:
+          type: string
+          pattern: '^urn:span:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          example: "urn:span:550e8400-e29b-41d4-a716-446655440000"
+          description: URN of this span
+
+        prev:
+          type: string
+          pattern: '^urn:span:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: Previous span URN (for chains)
+
+        did:
+          type: object
+          required: [actor, action]
+          properties:
+            actor:
+              type: string
+              example: "usr_abc123"
+            action:
+              type: string
+              enum: [append]
+
+        intent:
+          type: string
+          pattern: '^[a-z_]+(\.[a-z_]+)*$'
+          example: "registry.person.create"
+          description: Dot-separated intent path
+
+        subject:
+          type: string
+          pattern: '^urn:'
+          example: "urn:registry:person/joana_m_silva"
+          description: Subject URN
+
+        input:
+          type: object
+          properties:
+            args:
+              type: array
+              items: {}
+            env:
+              type: object
+              additionalProperties: true
+            content:
+              type: string
+            bytes_b64:
+              type: string
+              format: base64
+
+        payload:
+          type: object
+          description: Intent-specific payload
+          additionalProperties: true
+
+        output:
+          type: object
+          properties:
+            stdout:
+              type: string
+            stderr:
+              type: string
+            exit_code:
+              type: integer
+          additionalProperties: true
+
+        ts:
+          type: string
+          format: date-time
+          example: "2025-11-17T12:34:56Z"
+
+        signature:
+          type: object
+          properties:
+            kid:
+              type: string
+            alg:
+              type: string
+              enum: [ed25519-blake3]
+            sig:
+              type: string
+              format: base64
+
+    Receipt:
+      type: object
+      required: [ts, hash, signature]
+      properties:
+        ts:
+          type: string
+          format: date-time
+        hash:
+          type: string
+          pattern: '^blake3:[a-f0-9]{64}$'
+        signature:
+          type: string
+          format: base64
+        merkle:
+          type: string
+          description: Optional Merkle proof
+
+    # ============================================================
+    # ACK RESPONSES
+    # ============================================================
+
+    AckOk:
+      type: object
+      required: [status, this, trace_id, receipt]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        this:
+          type: string
+          pattern: '^urn:span:'
+        trace_id:
+          type: string
+          format: uuid
+        receipt:
+          $ref: '#/components/schemas/Receipt'
+
+    AckNeedMore:
+      type: object
+      required: [status, trace_id, missing_fields, suggested_reply]
+      properties:
+        status:
+          type: string
+          enum: [need_more]
+        trace_id:
+          type: string
+          format: uuid
+        missing_fields:
+          type: array
+          items:
+            type: string
+        why:
+          type: object
+          additionalProperties:
+            type: string
+        suggested_reply:
+          type: string
+
+    AckInvalid:
+      type: object
+      required: [status, trace_id, errors, suggested_reply]
+      properties:
+        status:
+          type: string
+          enum: [invalid]
+        trace_id:
+          type: string
+          format: uuid
+        errors:
+          type: array
+          items:
+            type: string
+        suggested_reply:
+          type: string
+
+    Ack:
+      oneOf:
+        - $ref: '#/components/schemas/AckOk'
+        - $ref: '#/components/schemas/AckNeedMore'
+        - $ref: '#/components/schemas/AckInvalid'
+      discriminator:
+        propertyName: status
+
+    # ============================================================
+    # QUERY & STREAM
+    # ============================================================
+
+    QueryRequest:
+      type: object
+      required: [subject]
+      properties:
+        subject:
+          type: string
+          pattern: '^urn:'
+        intent:
+          type: string
+          description: 'Intent pattern (supports wildcards: prefix*)'
+        since:
+          type: string
+          format: date-time
+        cursor:
+          type: string
+          description: Pagination cursor
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 100
+
+    QueryResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Span'
+        cursor:
+          type: string
+          description: Next page cursor
+
+    # ============================================================
+    # UNIVERSAL / NL → SPAN
+    # ============================================================
+
+    UniversalRequest:
+      type: object
+      properties:
+        paragraph:
+          type: string
+          description: Natural language input
+        span:
+          $ref: '#/components/schemas/Span'
+          description: Partial or complete span
+        intent_hint:
+          type: string
+        dry_run:
+          type: boolean
+          default: true
+        ctx:
+          type: object
+          additionalProperties: true
+
+    UniversalResponse:
+      allOf:
+        - $ref: '#/components/schemas/Ack'
+        - type: object
+          properties:
+            compiled_span:
+              $ref: '#/components/schemas/Span'
+
+    # ============================================================
+    # WEBHOOKS
+    # ============================================================
+
+    WebhookCreateRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+            pattern: '^[a-z_]+(\.[a-z_*]+)*$'
+          example: ["run_state.*", "registry.person.*"]
+
+    WebhookCreateResponse:
+      type: object
+      required: [id, url, events]
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # ============================================================
+    # MINI SUITE SCHEMAS
+    # ============================================================
+
+    # miniPrompt
+    PromptCompileRequest:
+      type: object
+      required: [kernel]
+      properties:
+        kernel:
+          type: string
+          description: Prompt kernel markdown
+
+    PromptCompileResponse:
+      type: object
+      properties:
+        hash:
+          type: string
+          pattern: '^blake3:'
+        normalized:
+          type: string
+
+    PromptRunRequest:
+      type: object
+      required: [kernel]
+      properties:
+        kernel:
+          type: string
+        vars:
+          type: object
+          additionalProperties: true
+
+    PromptRunResponse:
+      type: object
+      properties:
+        result:
+          type: string
+        hash:
+          type: string
+
+    # miniMemory
+    MemoryPutRequest:
+      type: object
+      required: [key, value]
+      properties:
+        key:
+          type: string
+        value:
+          type: object
+        embedding:
+          type: array
+          items:
+            type: number
+
+    MemoryGetRequest:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+
+    MemorySearchRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+        topk:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 5
+
+    MemoryGrantRequest:
+      type: object
+      required: [principal, key, permissions]
+      properties:
+        principal:
+          type: string
+        key:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+            enum: [read, write, delete]
+
+    # miniWorkflows
+    WorkflowStartRequest:
+      type: object
+      required: [flow]
+      properties:
+        flow:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+
+    WorkflowStepRequest:
+      type: object
+      required: [id, step]
+      properties:
+        id:
+          type: string
+        step:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+
+    WorkflowState:
+      type: object
+      properties:
+        id:
+          type: string
+        flow:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        current_step:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # miniTools
+    ToolInvokeRequest:
+      type: object
+      required: [tool, args]
+      properties:
+        tool:
+          type: string
+          example: "http"
+        args:
+          type: object
+          additionalProperties: true
+
+    # miniContainer
+    ContainerDeployRequest:
+      type: object
+      required: [ref, target]
+      properties:
+        ref:
+          type: string
+          pattern: '^mc:[a-z0-9_-]+/[a-z0-9_-]+@blake3:[a-f0-9]{64}$'
+          example: "mc:voulezvous/web@blake3:abcd1234..."
+        target:
+          type: object
+          required: [provider, project_id, service]
+          properties:
+            provider:
+              type: string
+              enum: [railway, podman, docker]
+            project_id:
+              type: string
+            service:
+              type: string
+        options:
+          type: object
+          additionalProperties: true
+
+    WalletSignRequest:
+      type: object
+      required: [payload]
+      properties:
+        kid:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+
+    WalletSignResponse:
+      type: object
+      required: [signature, kid]
+      properties:
+        signature:
+          type: string
+          format: base64
+        kid:
+          type: string
+        hash:
+          type: string
+
+    WalletVerifyRequest:
+      type: object
+      required: [payload, signature, kid]
+      properties:
+        payload:
+          type: object
+        signature:
+          type: string
+          format: base64
+        kid:
+          type: string
+
+    WalletVerifyResponse:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+        reason:
+          type: string
+
+    VaultPutRequest:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+        encryption:
+          type: string
+          enum: [xchacha20]
+          default: xchacha20
+
+    VaultGetRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+
+    # miniContratos
+    ContractRegisterRequest:
+      type: object
+      required: [template, parties]
+      properties:
+        template:
+          type: string
+          example: "nda@v3"
+        parties:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              role:
+                type: string
+        effective_date:
+          type: string
+          format: date
+        jurisdiction:
+          type: string
+          pattern: '^[A-Z]{2}$'
+
+    ContractFlowRequest:
+      type: object
+      required: [id, action]
+      properties:
+        id:
+          type: string
+        action:
+          type: string
+          enum: [sign, amend, terminate]
+        actor:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+
+    Contract:
+      type: object
+      properties:
+        id:
+          type: string
+        template:
+          type: string
+        parties:
+          type: array
+          items:
+            type: object
+        status:
+          type: string
+          enum: [draft, active, terminated]
+        created_at:
+          type: string
+          format: date-time
+
+    # TDLN
+    TDLNDecideRequest:
+      type: object
+      properties:
+        paragraph:
+          type: string
+        span:
+          $ref: '#/components/schemas/Span'
+        ctx:
+          type: object
+          additionalProperties: true
+        prefer_premium:
+          type: boolean
+          default: false
+
+    TDLNDecideResponse:
+      allOf:
+        - $ref: '#/components/schemas/Ack'
+        - type: object
+          properties:
+            span:
+              $ref: '#/components/schemas/Span'
+            lineage:
+              type: object
+              properties:
+                advisor:
+                  type: object
+                  properties:
+                    local:
+                      type: object
+                    premium:
+                      type: object
+                tdln:
+                  type: object
+
+    TDLNAssistRequest:
+      type: object
+      properties:
+        paragraph:
+          type: string
+        span:
+          $ref: '#/components/schemas/Span'
+        ctx:
+          type: object
+          additionalProperties: true
+
+    TDLNAssistResponse:
+      type: object
+      properties:
+        draft:
+          $ref: '#/components/schemas/Span'
+        missing:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        advisor:
+          type: object
+
+    TDLNCompileRequest:
+      type: object
+      required: [span]
+      properties:
+        span:
+          $ref: '#/components/schemas/Span'
+
+    # ============================================================
+    # ERROR RESPONSES
+    # ============================================================
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - UNAUTHENTICATED
+            - FORBIDDEN
+            - NOT_FOUND
+            - NONCE_REUSED
+            - IDEMPOTENCY_CONFLICT
+            - TDLN_INVALID
+            - SCHEMA_INVALID
+            - SIGNATURE_INVALID
+            - PROOF_REQUIRED
+            - RATE_LIMITED
+            - INTERNAL
+        message:
+          type: string
+        trace_id:
+          type: string
+          format: uuid
+        details:
+          type: object
+          additionalProperties: true
+
+security:
+  - ApiKeyAuth: []
+
+# ============================================================
+# PATHS
+# ============================================================
+
+paths:
+  /v1/spans:
+    post:
+      summary: Append span(s)
+      description: |
+        Append one or more spans to the ledger. TDLN Gate validates and normalizes.
+
+        Returns per-span ACK: ok, need_more, or invalid.
+      operationId: appendSpans
+      tags: [Core]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/EnvHeader'
+        - $ref: '#/components/parameters/SignatureAlgHeader'
+        - $ref: '#/components/parameters/SignatureKeyIdHeader'
+        - $ref: '#/components/parameters/SignatureHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+        - $ref: '#/components/parameters/NonceHeader'
+        - $ref: '#/components/parameters/PayloadHashHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/Span'
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/Span'
+                  maxItems: 100
+            examples:
+              single:
+                summary: Single span
+                value:
+                  schema_version: "1.1.0"
+                  entity_type: "contract"
+                  this: "urn:span:550e8400-e29b-41d4-a716-446655440000"
+                  did:
+                    actor: "usr_abc123"
+                    action: "append"
+                  intent: "registry.person.create"
+                  subject: "urn:registry:person/joana_m_silva"
+                  payload:
+                    kind: "registry/person.v1"
+                    name: "Joana Maria Silva"
+                    email: "joana@example.com"
+                    country: "PT"
+                    consent: true
+                  ts: "2025-11-17T12:34:56Z"
+              batch:
+                summary: Multiple spans
+                value:
+                  - schema_version: "1.1.0"
+                    entity_type: "contract"
+                    this: "urn:span:550e8400-e29b-41d4-a716-446655440001"
+                    did: {actor: "usr_abc", action: "append"}
+                    intent: "registry.person.create"
+                    subject: "urn:registry:person/alice"
+                    payload: {kind: "registry/person.v1", name: "Alice"}
+                    ts: "2025-11-17T12:34:56Z"
+                  - schema_version: "1.1.0"
+                    entity_type: "contract"
+                    this: "urn:span:550e8400-e29b-41d4-a716-446655440002"
+                    did: {actor: "usr_abc", action: "append"}
+                    intent: "registry.person.create"
+                    subject: "urn:registry:person/bob"
+                    payload: {kind: "registry/person.v1", name: "Bob"}
+                    ts: "2025-11-17T12:34:57Z"
+      responses:
+        '200':
+          description: Success (per-span ACK)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Ack'
+                  - type: array
+                    items:
+                      $ref: '#/components/schemas/Ack'
+              examples:
+                ok:
+                  summary: Accepted
+                  value:
+                    status: ok
+                    this: "urn:span:550e8400-e29b-41d4-a716-446655440000"
+                    trace_id: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+                    receipt:
+                      ts: "2025-11-17T12:34:56.123Z"
+                      hash: "blake3:abcd1234567890abcdef..."
+                      signature: "SGVsbG8gV29ybGQ="
+                need_more:
+                  summary: Missing fields
+                  value:
+                    status: need_more
+                    trace_id: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+                    missing_fields: ["email", "country"]
+                    why:
+                      email: "Required for person registration"
+                      country: "ISO-3166 alpha-2 country code required"
+                    suggested_reply: "Please provide email and country (ISO-3166 code)"
+                invalid:
+                  summary: Validation failed
+                  value:
+                    status: invalid
+                    trace_id: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+                    errors:
+                      - "Invalid country code 'XX' (must be ISO-3166)"
+                      - "Email format invalid"
+                    suggested_reply: "Fix country code and email format"
+        '401':
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict (nonce reused or idempotency)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '428':
+          description: Proof required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: PROOF_REQUIRED
+                message: "deploy.apply requires wallet.proof for intent deploy.allow"
+                trace_id: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/universal:
+    post:
+      summary: Natural language to span
+      description: |
+        Convert natural language (paragraph) to validated span via TDLN Gate.
+        Optional dry_run mode for validation without append.
+      operationId: universal
+      tags: [Core]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/EnvHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UniversalRequest'
+            examples:
+              nl_input:
+                summary: Natural language
+                value:
+                  paragraph: "Cadastrar pessoa Joana, email joana@example.com, país PT, consent ok"
+                  dry_run: true
+              partial_span:
+                summary: Partial span completion
+                value:
+                  paragraph: "Fill in missing fields"
+                  span:
+                    intent: "registry.person.create"
+                    subject: "urn:registry:person/joana"
+                    payload:
+                      name: "Joana"
+                  dry_run: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UniversalResponse'
+              examples:
+                success:
+                  value:
+                    status: ok
+                    this: "urn:span:550e8400-e29b-41d4-a716-446655440000"
+                    trace_id: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+                    compiled_span:
+                      schema_version: "1.1.0"
+                      entity_type: "contract"
+                      this: "urn:span:550e8400-e29b-41d4-a716-446655440000"
+                      did: {actor: "system", action: "append"}
+                      intent: "registry.person.create"
+                      subject: "urn:registry:person/joana_m_silva"
+                      payload:
+                        kind: "registry/person.v1"
+                        name: "Joana"
+                        email: "joana@example.com"
+                        country: "PT"
+                        consent: true
+                      ts: "2025-11-17T12:34:56Z"
+                    receipt:
+                      ts: "2025-11-17T12:34:56.123Z"
+                      hash: "blake3:abcd..."
+                      signature: "SGVs..."
+        '422':
+          description: TDLN validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AckInvalid'
+
+  /v1/spans/query:
+    post:
+      summary: Query spans
+      description: |
+        Query spans by subject and optional intent pattern.
+        Supports pagination via cursor.
+      operationId: querySpans
+      tags: [Core]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/EnvHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+            examples:
+              basic:
+                summary: Basic query
+                value:
+                  subject: "urn:registry:person/joana"
+                  limit: 10
+              with_intent:
+                summary: Filter by intent
+                value:
+                  subject: "urn:registry:person/joana"
+                  intent: "registry.person.*"
+                  since: "2025-11-01T00:00:00Z"
+                  limit: 50
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+              example:
+                items:
+                  - schema_version: "1.1.0"
+                    entity_type: "contract"
+                    this: "urn:span:550e8400-e29b-41d4-a716-446655440000"
+                    did: {actor: "usr_abc", action: "append"}
+                    intent: "registry.person.create"
+                    subject: "urn:registry:person/joana"
+                    payload: {kind: "registry/person.v1", name: "Joana"}
+                    ts: "2025-11-17T12:34:56Z"
+                cursor: "eyJvZmZzZXQiOjEwfQ=="
+
+  /v1/stream:
+    get:
+      summary: Server-Sent Events stream
+      description: |
+        Real-time stream of spans matching subject and intent pattern.
+        Supports auto-reconnect with Last-Event-Id.
+      operationId: streamSpans
+      tags: [Core]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - name: subject
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^urn:'
+        - name: intent
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Intent pattern (supports wildcard *)
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                id: 1
+                event: span
+                data: {"schema_version":"1.1.0","entity_type":"function","this":"urn:span:...","intent":"run_state.running",...}
+
+                id: 2
+                event: span
+                data: {"schema_version":"1.1.0","entity_type":"function","this":"urn:span:...","intent":"run_state.exited",...}
+
+  /v1/webhooks:
+    post:
+      summary: Register webhook
+      description: Register webhook for event delivery with Ed25519 signature
+      operationId: registerWebhook
+      tags: [Core]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookCreateRequest'
+            example:
+              url: "https://example.com/webhooks/logline"
+              events: ["run_state.*", "registry.*"]
+      responses:
+        '201':
+          description: Webhook created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookCreateResponse'
+
+  # ============================================================
+  # MINI SUITE ENDPOINTS
+  # ============================================================
+
+  /v1/spans/execute:
+    post:
+      summary: Execute span (mini core)
+      tags: [mini]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/EnvHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [span]
+              properties:
+                span:
+                  $ref: '#/components/schemas/Span'
+      responses:
+        '200':
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ack'
+
+  /v1/policies/evaluate:
+    post:
+      summary: Evaluate policies
+      tags: [mini]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                policies:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Policy result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  allowed:
+                    type: boolean
+                  violations:
+                    type: array
+                    items:
+                      type: string
+
+  /v1/prompt/compile:
+    post:
+      summary: Compile prompt kernel
+      tags: [miniPrompt]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromptCompileRequest'
+      responses:
+        '200':
+          description: Compiled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptCompileResponse'
+
+  /v1/prompt/run:
+    post:
+      summary: Run prompt with variables
+      tags: [miniPrompt]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromptRunRequest'
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptRunResponse'
+
+  /v1/memory/put:
+    post:
+      summary: Store memory item
+      tags: [miniMemory]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryPutRequest'
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  hash:
+                    type: string
+
+  /v1/memory/get:
+    post:
+      summary: Retrieve memory item
+      tags: [miniMemory]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryGetRequest'
+      responses:
+        '200':
+          description: Retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  value:
+                    type: object
+
+  /v1/memory/search:
+    post:
+      summary: Semantic search
+      tags: [miniMemory]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemorySearchRequest'
+      responses:
+        '200':
+          description: Results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                        value:
+                          type: object
+                        score:
+                          type: number
+
+  /v1/memory/grant:
+    post:
+      summary: Grant access to memory
+      tags: [miniMemory]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryGrantRequest'
+      responses:
+        '200':
+          description: Granted
+
+  /v1/workflows/start:
+    post:
+      summary: Start workflow
+      tags: [miniWorkflows]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowStartRequest'
+      responses:
+        '200':
+          description: Started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowState'
+
+  /v1/workflows/step:
+    post:
+      summary: Advance workflow step
+      tags: [miniWorkflows]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowStepRequest'
+      responses:
+        '200':
+          description: Advanced
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowState'
+
+  /v1/workflows/{id}:
+    get:
+      summary: Get workflow state
+      tags: [miniWorkflows]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: State
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowState'
+
+  /v1/tools/invoke:
+    post:
+      summary: Invoke tool
+      tags: [miniTools]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolInvokeRequest'
+      responses:
+        '200':
+          description: Tool result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+
+  /v1/container/deploy:
+    post:
+      summary: Deploy container
+      tags: [miniContainer]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContainerDeployRequest'
+      responses:
+        '200':
+          description: Deploy initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ack'
+
+  /v1/container/wallet/sign:
+    post:
+      summary: Sign payload
+      tags: [miniContainer]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletSignRequest'
+      responses:
+        '200':
+          description: Signed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletSignResponse'
+
+  /v1/container/wallet/verify:
+    post:
+      summary: Verify signature
+      tags: [miniContainer]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletVerifyRequest'
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletVerifyResponse'
+
+  /v1/container/vault/put:
+    post:
+      summary: Store secret/artifact
+      tags: [miniContainer]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VaultPutRequest'
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  hash:
+                    type: string
+
+  /v1/container/vault/get:
+    post:
+      summary: Retrieve secret/artifact
+      tags: [miniContainer]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VaultGetRequest'
+      responses:
+        '200':
+          description: Retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  value:
+                    type: string
+
+  /v1/contratos/register:
+    post:
+      summary: Register contract
+      tags: [miniContratos]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContractRegisterRequest'
+      responses:
+        '200':
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contract'
+
+  /v1/contratos/flow:
+    post:
+      summary: Execute contract flow
+      tags: [miniContratos]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContractFlowRequest'
+      responses:
+        '200':
+          description: Flow executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contract'
+
+  /v1/contratos/{id}:
+    get:
+      summary: Get contract
+      tags: [miniContratos]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Contract
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contract'
+
+  /v1/tdln/decide:
+    post:
+      summary: TDLN decide (NL → span decision)
+      tags: [TDLN]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TDLNDecideRequest'
+            examples:
+              nl:
+                summary: Natural language
+                value:
+                  paragraph: "criar cliente Joana, email joana@example.com"
+                  prefer_premium: false
+              partial:
+                summary: Complete partial span
+                value:
+                  span:
+                    intent: "registry.person.create"
+                    subject: "urn:registry:person/joana"
+                    payload:
+                      name: "Joana"
+      responses:
+        '200':
+          description: Decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TDLNDecideResponse'
+
+  /v1/tdln/assist:
+    post:
+      summary: TDLN assist (advisory only)
+      tags: [TDLN]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TDLNAssistRequest'
+      responses:
+        '200':
+          description: Assistance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TDLNAssistResponse'
+
+  /v1/tdln/compile:
+    post:
+      summary: TDLN compile (validate span)
+      tags: [TDLN]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TDLNCompileRequest'
+      responses:
+        '200':
+          description: Compiled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ack'
+
+tags:
+  - name: Core
+    description: Core span operations
+  - name: mini
+    description: Mini core (execute, policies)
+  - name: miniPrompt
+    description: Prompt management
+  - name: miniMemory
+    description: Semantic memory
+  - name: miniWorkflows
+    description: Workflow orchestration
+  - name: miniTools
+    description: Tool execution
+  - name: miniContainer
+    description: Container deployment & wallet
+  - name: miniContratos
+    description: Contract management
+  - name: TDLN
+    description: TDLN decision engine
