@@ -1,0 +1,1190 @@
+# LogLine Span Schema Catalog v1.0
+# Complete schema definitions for all intents
+
+version: 1.0.0
+updated: 2025-11-17
+
+# ============================================================
+# REGISTRY INTENTS
+# ============================================================
+
+schemas:
+  # ----------------------------------------------------------
+  # Person Management
+  # ----------------------------------------------------------
+
+  registry.person.create:
+    entity_type: contract
+    description: Register a new person in the registry
+
+    fields:
+      name:
+        type: string
+        required: true
+        min_length: 2
+        max_length: 200
+        normalize: title_case_trim
+        description: Full name of the person
+        examples:
+          - Joana Maria Silva
+          - João Pedro Santos
+
+      email:
+        type: email
+        required: true
+        normalize: lowercase_trim
+        description: Email address
+        examples:
+          - joana@example.com
+          - joao.santos@company.pt
+
+      country:
+        type: country
+        format: iso3166-alpha2
+        required: true
+        normalize: uppercase
+        description: Country code (ISO-3166 alpha-2)
+        examples:
+          - PT
+          - US
+          - BR
+
+      consent:
+        type: boolean
+        required: true
+        validate: must_be_true
+        description: Privacy consent flag (must be true)
+        examples:
+          - true
+
+      phone:
+        type: string
+        required: false
+        pattern: '^\+[1-9]\d{1,14}$'
+        normalize: e164
+        description: Phone number in E.164 format
+        examples:
+          - "+351912345678"
+          - "+14155552671"
+
+      tax_id:
+        type: string
+        required: false
+        description: Tax identification number
+        examples:
+          - "123456789"
+
+      birth_date:
+        type: date
+        format: iso8601
+        required: false
+        description: Date of birth
+        examples:
+          - "1990-01-15"
+
+      address:
+        type: object
+        required: false
+        schema:
+          street:
+            type: string
+          city:
+            type: string
+          postal_code:
+            type: string
+          country:
+            type: country
+            format: iso3166-alpha2
+
+    payload_kind: registry/person.v1
+    subject_pattern: urn:registry:person/{slug}
+
+    examples:
+      - intent: registry.person.create
+        subject: urn:registry:person/joana_m_silva
+        payload:
+          kind: registry/person.v1
+          name: Joana Maria Silva
+          email: joana@example.com
+          country: PT
+          consent: true
+          phone: "+351912345678"
+
+  registry.person.update:
+    entity_type: contract
+    description: Update person information
+
+    fields:
+      email:
+        type: email
+        required: false
+        normalize: lowercase_trim
+
+      phone:
+        type: string
+        required: false
+        pattern: '^\+[1-9]\d{1,14}$'
+        normalize: e164
+
+      address:
+        type: object
+        required: false
+
+    payload_kind: registry/person.v1
+    subject_pattern: urn:registry:person/{id}
+
+  registry.person.delete:
+    entity_type: contract
+    description: Delete/archive person (GDPR right to erasure)
+
+    fields:
+      reason:
+        type: string
+        required: true
+        enum: [user_request, gdpr_erasure, admin_action]
+
+      retain_metadata:
+        type: boolean
+        required: false
+        default: true
+        description: Keep audit metadata (anonymized)
+
+    payload_kind: registry/person.v1
+    subject_pattern: urn:registry:person/{id}
+
+  # ----------------------------------------------------------
+  # Organization Management
+  # ----------------------------------------------------------
+
+  registry.org.create:
+    entity_type: contract
+    description: Register a new organization
+
+    fields:
+      name:
+        type: string
+        required: true
+        min_length: 2
+        max_length: 200
+        normalize: title_case_trim
+        description: Organization name
+
+      legal_name:
+        type: string
+        required: false
+        description: Legal business name (if different from name)
+
+      country:
+        type: country
+        format: iso3166-alpha2
+        required: true
+        normalize: uppercase
+        description: Registration country
+
+      tax_id:
+        type: string
+        required: true
+        description: Tax identification number
+
+      industry:
+        type: string
+        required: false
+        enum:
+          - technology
+          - finance
+          - healthcare
+          - education
+          - retail
+          - manufacturing
+          - other
+
+      website:
+        type: url
+        required: false
+        normalize: lowercase_trim
+
+      email:
+        type: email
+        required: false
+        normalize: lowercase_trim
+
+    payload_kind: registry/org.v1
+    subject_pattern: urn:registry:org/{slug}
+
+    examples:
+      - intent: registry.org.create
+        subject: urn:registry:org/acme_corp
+        payload:
+          kind: registry/org.v1
+          name: Acme Corporation
+          legal_name: Acme Corp Ltd
+          country: US
+          tax_id: "12-3456789"
+          industry: technology
+          website: "https://acme.com"
+
+  registry.org.link:
+    entity_type: contract
+    description: Link person to organization
+
+    fields:
+      person:
+        type: urn
+        pattern: '^urn:registry:person/'
+        required: true
+
+      org:
+        type: urn
+        pattern: '^urn:registry:org/'
+        required: true
+
+      role:
+        type: string
+        required: true
+        enum: [owner, admin, member, guest]
+
+      permissions:
+        type: array
+        items:
+          type: string
+        required: false
+
+    payload_kind: registry/org_link.v1
+    subject_pattern: urn:registry:org/{org_id}
+
+  # ----------------------------------------------------------
+  # Asset Registry
+  # ----------------------------------------------------------
+
+  registry.asset.register:
+    entity_type: file
+    description: Register digital asset
+
+    fields:
+      asset_type:
+        type: string
+        required: true
+        enum: [image, video, document, audio, dataset, code]
+
+      name:
+        type: string
+        required: true
+
+      hash:
+        type: string
+        required: true
+        pattern: '^blake3:[a-f0-9]{64}$'
+        description: BLAKE3 hash of asset
+
+      size_bytes:
+        type: integer
+        required: true
+        min: 0
+
+      mime_type:
+        type: string
+        required: true
+
+      storage_uri:
+        type: url
+        required: true
+        description: Storage location (s3://, https://, ipfs://)
+
+      metadata:
+        type: object
+        required: false
+        description: Asset-specific metadata
+
+    payload_kind: registry/asset.v1
+    subject_pattern: urn:registry:asset/{hash}
+
+  # ============================================================
+  # DEPLOY INTENTS
+  # ============================================================
+
+  deploy.plan:
+    entity_type: function
+    description: Plan deployment (dry-run)
+
+    fields:
+      ref:
+        type: string
+        pattern: '^mc:[a-z0-9_-]+/[a-z0-9_-]+@blake3:[a-f0-9]{64}$'
+        required: true
+        description: MiniContainer reference
+
+      target:
+        type: object
+        required: true
+        schema:
+          provider:
+            type: string
+            enum: [railway, podman, docker, fly, render]
+            required: true
+
+          project_id:
+            type: string
+            required: false
+            description: Provider-specific project ID
+
+          service:
+            type: string
+            required: false
+            description: Service name
+
+          socket:
+            type: string
+            required: false
+            description: Socket path (for podman/docker)
+
+    payload_kind: deploy/plan.v1
+    subject_pattern: urn:minicontainer:{tenant}/{name}
+
+  deploy.apply:
+    entity_type: function
+    description: Execute deployment
+
+    fields:
+      ref:
+        type: string
+        pattern: '^mc:[a-z0-9_-]+/[a-z0-9_-]+@blake3:[a-f0-9]{64}$'
+        required: true
+        description: MiniContainer reference with content hash
+
+      target:
+        type: object
+        required: true
+        schema:
+          provider:
+            type: string
+            enum: [railway, podman, docker, fly, render]
+            required: true
+
+          project_id:
+            type: string
+            required: true
+
+          service:
+            type: string
+            required: true
+
+      options:
+        type: object
+        required: false
+        schema:
+          auto_scale:
+            type: boolean
+            default: false
+
+          replicas:
+            type: integer
+            min: 1
+            max: 100
+            default: 1
+
+          health_check:
+            type: object
+            schema:
+              path:
+                type: string
+              interval_seconds:
+                type: integer
+                min: 5
+                max: 300
+
+          rollback_on_failure:
+            type: boolean
+            default: true
+
+    payload_kind: deploy/apply.v1
+    subject_pattern: urn:minicontainer:{tenant}/{name}
+
+    requires_proof: true
+    proof_intent: deploy.allow
+
+    examples:
+      - intent: deploy.apply
+        subject: urn:minicontainer:vv/web
+        payload:
+          kind: deploy/apply.v1
+          ref: mc:vv/web@blake3:abcd1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+          target:
+            provider: railway
+            project_id: rw_proj_123
+            service: web
+          options:
+            auto_scale: true
+            replicas: 3
+
+  deploy.rollback:
+    entity_type: function
+    description: Rollback to previous deployment
+
+    fields:
+      run_id:
+        type: string
+        required: true
+        description: Run ID to rollback to
+
+      reason:
+        type: string
+        required: false
+
+    payload_kind: deploy/rollback.v1
+    subject_pattern: urn:minicontainer:{tenant}/{name}
+
+  # ============================================================
+  # RUN STATE INTENTS (System-generated)
+  # ============================================================
+
+  run_state.pending:
+    entity_type: function
+    description: Deployment pending
+    system_generated: true
+
+    fields:
+      run_id:
+        type: string
+        required: true
+
+      ref:
+        type: string
+        required: true
+
+      target:
+        type: object
+        required: true
+
+    payload_kind: run_state/pending.v1
+
+  run_state.running:
+    entity_type: function
+    description: Deployment running
+    system_generated: true
+
+    fields:
+      run_id:
+        type: string
+        required: true
+
+      pid:
+        type: integer
+        required: false
+
+      started_at:
+        type: date
+        format: iso8601
+        required: true
+
+      node:
+        type: string
+        required: false
+
+    payload_kind: run_state/running.v1
+
+  run_state.exited:
+    entity_type: function
+    description: Deployment exited
+    system_generated: true
+
+    fields:
+      run_id:
+        type: string
+        required: true
+
+      exit_code:
+        type: integer
+        required: true
+
+      exited_at:
+        type: date
+        format: iso8601
+        required: true
+
+      duration_seconds:
+        type: number
+        required: false
+
+    payload_kind: run_state/exited.v1
+
+  run_state.failed:
+    entity_type: function
+    description: Deployment failed
+    system_generated: true
+
+    fields:
+      run_id:
+        type: string
+        required: true
+
+      error:
+        type: string
+        required: true
+
+      failed_at:
+        type: date
+        format: iso8601
+        required: true
+
+    payload_kind: run_state/failed.v1
+
+  # ============================================================
+  # WALLET INTENTS
+  # ============================================================
+
+  wallet.proof.submit:
+    entity_type: decision
+    description: Submit proof of authorization
+
+    fields:
+      proof:
+        type: object
+        required: true
+        schema:
+          type:
+            type: string
+            enum: [ll.proof.v1]
+            required: true
+
+          intent:
+            type: string
+            required: true
+            description: Intent being authorized (e.g., deploy.allow)
+
+          result:
+            type: string
+            enum: [allow, deny]
+            required: true
+
+          kid:
+            type: string
+            required: true
+            description: Key ID used for signing
+
+          sig:
+            type: string
+            format: base64
+            required: true
+            description: Ed25519 signature
+
+          ts:
+            type: date
+            format: iso8601
+            required: true
+
+          nonce:
+            type: string
+            format: uuid
+            required: true
+
+    payload_kind: wallet/proof.v1
+    subject_pattern: urn:wallet:{tenant}
+
+    examples:
+      - intent: wallet.proof.submit
+        subject: urn:wallet:vv
+        payload:
+          kind: wallet/proof.v1
+          proof:
+            type: ll.proof.v1
+            intent: deploy.allow
+            result: allow
+            kid: kid_sign_1
+            sig: SGVsbG8gV29ybGQ=
+            ts: "2025-11-17T12:34:56Z"
+            nonce: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+
+  wallet.grant.create:
+    entity_type: decision
+    description: Create grant for secret/artifact access
+
+    fields:
+      artifact_id:
+        type: string
+        required: true
+
+      scope:
+        type: array
+        items:
+          type: string
+          enum: [runtime:read, runtime:write, admin:read, admin:write, admin:delete]
+        required: true
+
+      ttl:
+        type: string
+        pattern: '^P(\d+D)?(T\d+H)?$'
+        required: true
+        description: ISO-8601 duration (e.g., P30D for 30 days)
+
+      aud:
+        type: string
+        required: true
+        description: Audience (e.g., railway, podman, service_name)
+
+    payload_kind: wallet/grant.v1
+    subject_pattern: urn:wallet:{tenant}
+
+  wallet.grant.revoke:
+    entity_type: decision
+    description: Revoke grant
+
+    fields:
+      grant_id:
+        type: string
+        required: true
+
+      reason:
+        type: string
+        required: false
+
+    payload_kind: wallet/grant.v1
+    subject_pattern: urn:wallet:{tenant}
+
+  wallet.key.rotate:
+    entity_type: decision
+    description: Rotate signing key
+
+    fields:
+      old_kid:
+        type: string
+        required: true
+
+      new_kid:
+        type: string
+        required: true
+
+      new_pub:
+        type: string
+        format: hex
+        required: true
+        description: New Ed25519 public key (hex)
+
+    payload_kind: wallet/key_rotation.v1
+    subject_pattern: urn:wallet:{tenant}
+
+  # ============================================================
+  # MINICONTAINER INTENTS
+  # ============================================================
+
+  minicontainer.apply:
+    entity_type: contract
+    description: Apply/update minicontainer manifest
+
+    fields:
+      manifest:
+        type: object
+        required: true
+        description: Full minicontainer manifest
+        schema:
+          type:
+            type: string
+            enum: [ll.minicontainer.v1]
+
+          version:
+            type: string
+            pattern: '^\d+\.\d+\.\d+$'
+
+          owner:
+            type: object
+            schema:
+              user_id:
+                type: string
+              tenant:
+                type: string
+
+          slots:
+            type: object
+
+          artifacts:
+            type: array
+
+          grants:
+            type: array
+
+          deploy:
+            type: object
+
+          provenance:
+            type: object
+            schema:
+              kid:
+                type: string
+              alg:
+                type: string
+                enum: [ed25519-blake3]
+              sig:
+                type: string
+
+    payload_kind: minicontainer/manifest.v1
+    subject_pattern: urn:minicontainer:{tenant}/{name}
+
+  minicontainer.verify:
+    entity_type: function
+    description: Verify minicontainer signature and schema
+
+    fields:
+      ref:
+        type: string
+        pattern: '^mc:[a-z0-9_-]+/[a-z0-9_-]+@blake3:[a-f0-9]{64}$'
+        required: true
+
+    payload_kind: minicontainer/verify.v1
+    subject_pattern: urn:minicontainer:{tenant}/{name}
+
+  # ============================================================
+  # AGENT INTENTS
+  # ============================================================
+
+  agent.task.request:
+    entity_type: agent
+    description: Request agent to perform task
+
+    fields:
+      agent_name:
+        type: string
+        required: true
+
+      task:
+        type: string
+        required: true
+        description: Natural language task description
+
+      context:
+        type: object
+        required: false
+        description: Additional context for the task
+
+      max_duration_seconds:
+        type: integer
+        required: false
+        default: 300
+
+    payload_kind: agent/task.v1
+    subject_pattern: urn:agent:{tenant}/{name}
+
+  agent.task.started:
+    entity_type: agent
+    description: Agent started task
+    system_generated: true
+
+    fields:
+      task_id:
+        type: string
+        required: true
+
+      started_at:
+        type: date
+        format: iso8601
+        required: true
+
+    payload_kind: agent/task.v1
+
+  agent.task.completed:
+    entity_type: agent
+    description: Agent completed task
+    system_generated: true
+
+    fields:
+      task_id:
+        type: string
+        required: true
+
+      result:
+        type: object
+        required: true
+
+      completed_at:
+        type: date
+        format: iso8601
+        required: true
+
+    payload_kind: agent/task.v1
+
+  agent.task.failed:
+    entity_type: agent
+    description: Agent task failed
+    system_generated: true
+
+    fields:
+      task_id:
+        type: string
+        required: true
+
+      error:
+        type: string
+        required: true
+
+      failed_at:
+        type: date
+        format: iso8601
+        required: true
+
+    payload_kind: agent/task.v1
+
+  # ============================================================
+  # DATASET / SPECTRA INTENTS
+  # ============================================================
+
+  dataset.create:
+    entity_type: contract
+    description: Create new dataset
+
+    fields:
+      name:
+        type: string
+        required: true
+
+      description:
+        type: string
+        required: false
+
+      schema_version:
+        type: string
+        required: false
+
+      metadata:
+        type: object
+        required: false
+
+    payload_kind: dataset/create.v1
+    subject_pattern: urn:dataset:{tenant}/{name}
+
+  dataset.file.add:
+    entity_type: file
+    description: Add file to dataset
+
+    fields:
+      dataset:
+        type: urn
+        pattern: '^urn:dataset:'
+        required: true
+
+      file_hash:
+        type: string
+        pattern: '^blake3:[a-f0-9]{64}$'
+        required: true
+
+      file_name:
+        type: string
+        required: true
+
+      size_bytes:
+        type: integer
+        required: true
+
+      mime_type:
+        type: string
+        required: false
+
+    payload_kind: dataset/file.v1
+    subject_pattern: urn:dataset:{tenant}/{name}
+
+  spectra.package:
+    entity_type: contract
+    description: Package dataset with Merkle tree and DV25 seal
+
+    fields:
+      dataset:
+        type: urn
+        pattern: '^urn:dataset:'
+        required: true
+
+      edition:
+        type: string
+        required: true
+
+      root_hash:
+        type: string
+        pattern: '^blake3:[a-f0-9]{64}$'
+        required: true
+        description: Merkle root hash
+
+    payload_kind: spectra/package.v1
+    subject_pattern: urn:dataset:{tenant}/{name}
+
+  spectra.publish:
+    entity_type: contract
+    description: Publish dataset edition
+
+    fields:
+      dataset:
+        type: urn
+        pattern: '^urn:dataset:'
+        required: true
+
+      edition:
+        type: string
+        required: true
+
+      limit:
+        type: integer
+        required: false
+        description: Distribution limit (# of accesses)
+
+    payload_kind: spectra/publish.v1
+    subject_pattern: urn:dataset:{tenant}/{name}@{edition}
+
+  # ============================================================
+  # SUPPLY CHAIN INTENTS
+  # ============================================================
+
+  supply.sbom.generate:
+    entity_type: function
+    description: Generate SBOM for image
+
+    fields:
+      image:
+        type: string
+        required: true
+        pattern: '^[a-z0-9.-]+/[a-z0-9._-]+:[a-z0-9._-]+(@sha256:[a-f0-9]{64})?$'
+        description: Container image reference
+
+      format:
+        type: string
+        enum: [spdx, cyclonedx]
+        default: spdx
+
+    payload_kind: supply/sbom.v1
+    subject_pattern: urn:supply:image/{image_hash}
+
+  supply.cosign.verify:
+    entity_type: function
+    description: Verify cosign signature on image
+
+    fields:
+      image:
+        type: string
+        required: true
+        pattern: '^[a-z0-9.-]+/[a-z0-9._-]+(@sha256:[a-f0-9]{64})?$'
+
+      public_key:
+        type: string
+        required: false
+        description: Public key for verification
+
+    payload_kind: supply/cosign.v1
+    subject_pattern: urn:supply:image/{image_hash}
+
+  supply.policy.set:
+    entity_type: law
+    description: Set supply chain policy
+
+    fields:
+      allowed_registries:
+        type: array
+        items:
+          type: string
+        required: false
+
+      require_signature:
+        type: boolean
+        default: true
+
+      require_sbom:
+        type: boolean
+        default: false
+
+      blocked_packages:
+        type: array
+        items:
+          type: string
+        required: false
+
+    payload_kind: supply/policy.v1
+    subject_pattern: urn:supply:policy/{tenant}
+
+  # ============================================================
+  # GOVERNANCE / LAW INTENTS
+  # ============================================================
+
+  law.create:
+    entity_type: law
+    description: Create governance law/policy
+
+    fields:
+      name:
+        type: string
+        required: true
+
+      rules:
+        type: array
+        items:
+          type: object
+        required: true
+
+      enforcement:
+        type: string
+        enum: [strict, advisory]
+        default: strict
+
+      scope:
+        type: object
+        required: false
+        schema:
+          tenants:
+            type: array
+            items:
+              type: string
+
+          intents:
+            type: array
+            items:
+              type: string
+
+    payload_kind: law/create.v1
+    subject_pattern: urn:law:{tenant}/{name}
+
+  quota.set:
+    entity_type: law
+    description: Set quota/rate limits
+
+    fields:
+      intent_pattern:
+        type: string
+        required: true
+        description: Intent pattern (supports wildcards)
+
+      rate_per_minute:
+        type: integer
+        required: false
+
+      rate_per_hour:
+        type: integer
+        required: false
+
+      burst:
+        type: integer
+        required: false
+
+      max_per_tenant:
+        type: integer
+        required: false
+
+    payload_kind: quota/set.v1
+    subject_pattern: urn:quota:{tenant}
+
+  # ============================================================
+  # WORKFLOW INTENTS
+  # ============================================================
+
+  workflow.start:
+    entity_type: function
+    description: Start workflow
+
+    fields:
+      flow_name:
+        type: string
+        required: true
+
+      input:
+        type: object
+        required: false
+
+    payload_kind: workflow/start.v1
+    subject_pattern: urn:workflow:{tenant}/{flow_name}
+
+  workflow.step:
+    entity_type: function
+    description: Execute workflow step
+
+    fields:
+      workflow_id:
+        type: string
+        required: true
+
+      step_name:
+        type: string
+        required: true
+
+      input:
+        type: object
+        required: false
+
+    payload_kind: workflow/step.v1
+    subject_pattern: urn:workflow:{tenant}/{flow_name}
+
+  # ============================================================
+  # TDLN META INTENTS
+  # ============================================================
+
+  tdln.compile:
+    entity_type: function
+    description: Compile/validate span without appending
+
+    fields:
+      span:
+        type: object
+        required: true
+
+    payload_kind: tdln/compile.v1
+
+  tdln.assist:
+    entity_type: function
+    description: Get TDLN assistance (advisory only)
+
+    fields:
+      paragraph:
+        type: string
+        required: false
+
+      span:
+        type: object
+        required: false
+
+    payload_kind: tdln/assist.v1
+
+# ============================================================
+# NORMALIZATION FUNCTIONS
+# ============================================================
+
+normalizations:
+  title_case_trim:
+    description: Title case and trim whitespace
+    examples:
+      - input: "  joana maria silva  "
+        output: "Joana Maria Silva"
+
+  lowercase_trim:
+    description: Lowercase and trim whitespace
+    examples:
+      - input: "  Joana@EXAMPLE.COM  "
+        output: "joana@example.com"
+
+  uppercase:
+    description: Convert to uppercase
+    examples:
+      - input: "pt"
+        output: "PT"
+
+  e164:
+    description: Convert to E.164 phone format
+    examples:
+      - input: "+351 91 234 5678"
+        output: "+351912345678"
+
+  slugify:
+    description: Convert to URL-safe slug
+    examples:
+      - input: "Joana Maria Silva"
+        output: "joana_m_silva"
+
+# ============================================================
+# VALIDATION FUNCTIONS
+# ============================================================
+
+validations:
+  must_be_true:
+    description: Value must be true
+    error: "Value must be true"
+
+  is_valid_email:
+    description: Valid email format
+    error: "Invalid email format"
+
+  is_iso3166_alpha2:
+    description: Valid ISO-3166 alpha-2 country code
+    error: "Invalid country code. Use ISO-3166 alpha-2 (e.g., PT, US, BR)"
+
+  is_e164_phone:
+    description: Valid E.164 phone number
+    error: "Invalid phone number. Use E.164 format (e.g., +351912345678)"
